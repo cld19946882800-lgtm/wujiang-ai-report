@@ -40,34 +40,28 @@ if 'selected_model' not in st.session_state:
 st.set_page_config(page_title="吴江区知识产权简报", layout="wide", page_icon="📈")
 
 # ==========================================
-# 💎 终极云端适配版 CSS (确保科技网格背景显示)
+# 💎 终极云端强制网格版 CSS
 # ==========================================
 st.markdown("""
     <style>
-    /* 1. 强制覆盖 Streamlit 默认白色背景 */
-    .stApp {
+    /* 1. 强制覆盖 Streamlit 最底层容器，直接焊上网格 */
+    [data-testid="stAppViewContainer"] {
         background-color: #f8fafc !important;
+        background-image: 
+            linear-gradient(to right, #cbd5e1 1px, transparent 1px),
+            linear-gradient(to bottom, #cbd5e1 1px, transparent 1px) !important;
+        background-size: 25px 25px !important;
     }
     
-    /* 2. 科技网格纹理 (修复云端不显示问题) */
-    .stApp::before {
-        content: "";
-        position: fixed;
-        top: 0; left: 0; width: 100%; height: 100%;
-        z-index: -1;
-        background-image: 
-            linear-gradient(to right, #e2e8f0 1px, transparent 1px),
-            linear-gradient(to bottom, #e2e8f0 1px, transparent 1px);
-        background-size: 30px 30px;
-        mask-image: radial-gradient(ellipse 80% 50% at 50% 0%, #000 70%, transparent 100%);
-        -webkit-mask-image: radial-gradient(ellipse 80% 50% at 50% 0%, #000 70%, transparent 100%);
-        opacity: 0.6;
+    /* 隐藏顶部可能遮挡网格的白条 */
+    [data-testid="stHeader"] {
+        background: transparent !important;
     }
 
-    /* 3. 标题美化 */
+    /* 2. 标题框加白底，让文字在网格上能看清 */
     .flat-title {
         border: 2px solid #e2e8f0; 
-        background-color: rgba(255, 255, 255, 0.9); 
+        background-color: rgba(255, 255, 255, 0.95); 
         color: #1e293b;
         font-weight: 900; 
         font-size: 20px; 
@@ -78,7 +72,7 @@ st.markdown("""
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
     }
 
-    /* 4. 按钮 3D 质感 */
+    /* 3. 按钮 3D 质感 */
     .stButton > button {
         box-shadow: 0px 4px 0px 0px #94a3b8 !important;
         border-radius: 8px !important;
@@ -93,9 +87,9 @@ st.markdown("""
         box-shadow: 0px 4px 0px 0px #b91c1c !important;
     }
 
-    /* 5. 上传框容器 */
+    /* 4. 上传框变半透明白底，不被网格干扰 */
     [data-testid="stFileUploader"] {
-        background-color: rgba(255, 255, 255, 0.8);
+        background-color: rgba(255, 255, 255, 0.9);
         border: 1px solid #e2e8f0;
         border-radius: 8px;
         padding: 12px;
@@ -108,7 +102,6 @@ st.title("📈 吴江区知识产权简报 AI 生成平台")
 st.markdown("上传吴江区各板块真实业务清单，Agent 将全自动完成数据透视、公文撰写与多图表大屏排版。")
 st.markdown("---")
 
-# 数据处理函数
 def process_excel_data(f_valid, f_pct, f_auth, f_loss):
     df_valid = pd.read_excel(f_valid)
     df_pct = pd.read_excel(f_pct)
@@ -131,7 +124,6 @@ def process_excel_data(f_valid, f_pct, f_auth, f_loss):
     loss_reasons = df_loss['失效原因'].value_counts()
     return totals, df_summary, top3_districts, top10_applicants, applicant_types, top5_ipc, loss_reasons
 
-# 文档与可视化生成函数 (保持原样)
 def generate_official_word(ai_text, df_summary, top10_applicants, loss_reasons):
     doc = Document()
     doc.styles['Normal'].font.name = u'仿宋'
@@ -165,7 +157,15 @@ def generate_visual_pdf(df_summary, top10_applicants, applicant_types, loss_reas
     plt.tight_layout(rect=[0, 0.03, 1, 0.95]); pdf_io = io.BytesIO(); plt.savefig(pdf_io, format='pdf'); plt.close(fig); pdf_io.seek(0)
     return pdf_io
 
-# 布局渲染
+def generate_visual_excel(df_summary, top10_applicants, loss_reasons):
+    excel_io = io.BytesIO()
+    with pd.ExcelWriter(excel_io, engine='openpyxl') as writer:
+        df_summary.to_excel(writer, sheet_name='区镇板块汇总')
+        top10_applicants.to_excel(writer, sheet_name='TOP10创新主体')
+        loss_reasons.to_excel(writer, sheet_name='失效预警分析')
+    excel_io.seek(0)
+    return excel_io
+
 col_left, col_right = st.columns([1, 2])
 with col_left:
     st.markdown('<div class="flat-title">上传业务清单</div>', unsafe_allow_html=True)
@@ -193,7 +193,13 @@ with col_right:
         if not st.session_state.processed:
             with st.status("智能体全链路运作中...", expanded=True) as status:
                 st.write("📥 [1/4] 正在解析表格并执行多维度分析...")
-                totals, df_summary, top3_dist, top10_app, app_types, top5_ipc, loss_rea = process_excel_data(f_valid, f_pct, f_auth, f_loss)
+                try:
+                    totals, df_summary, top3_dist, top10_app, app_types, top5_ipc, loss_rea = process_excel_data(f_valid, f_pct, f_auth, f_loss)
+                except Exception as e:
+                    status.update(label="处理异常中断！", state="error", expanded=True)
+                    st.error("🚨 【格式不规范提醒】您上传的文件内容不符合系统要求！")
+                    st.stop()
+                
                 st.write(f"✍️ [2/4] 正在唤醒 {st.session_state.selected_model} 撰写简报...")
                 c_key = VOLC_API_KEY if st.session_state.selected_model == "豆包大模型 (Volcengine)" else DEEPSEEK_API_KEY
                 c_url = VOLC_BASE_URL if st.session_state.selected_model == "豆包大模型 (Volcengine)" else DEEPSEEK_BASE_URL
@@ -204,17 +210,26 @@ with col_right:
                     response = client.chat.completions.create(model=c_name, messages=[{"role": "user", "content": prompt}], temperature=0.3)
                     final_text = response.choices[0].message.content
                 except Exception as e:
-                    st.error(f"🚨 调用失败：{str(e)}"); st.stop()
+                    error_msg = str(e)
+                    status.update(label="API 调用异常", state="error", expanded=True)
+                    if "402" in error_msg or "Insufficient Balance" in error_msg:
+                        st.error(f"🚨 **【账户余额不足】**：您的 {st.session_state.selected_model} 账户需要充值。")
+                    else:
+                        st.error(f"🚨 **【调用失败】**：{error_msg}")
+                    st.stop()
+                
                 st.write("📑 [3/4] 正在生成导出文件...")
                 st.session_state.word_file = generate_official_word(final_text, df_summary, top10_app, loss_rea)
+                st.session_state.excel_file = generate_visual_excel(df_summary, top10_app, loss_rea)
                 st.session_state.pdf_file = generate_visual_pdf(df_summary, top10_app, app_types, loss_rea)
                 st.session_state.final_text = final_text
                 st.session_state.processed = True
                 status.update(label="处理完成！", state="complete", expanded=False); st.rerun() 
         if st.session_state.processed:
             st.success("🎉 数据深加工完成！")
-            c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns(3)
             with c1: st.download_button("📝 下载 Word 简报", data=st.session_state.word_file, file_name="吴江简报.docx", use_container_width=True)
-            with c2: st.download_button("📈 下载可视化 PDF", data=st.session_state.pdf_file, file_name="分析大屏.pdf", use_container_width=True)
+            with c2: st.download_button("📊 下载多板块底稿", data=st.session_state.excel_file, file_name="吴江区数据分析包.xlsx", use_container_width=True)
+            with c3: st.download_button("📈 下载可视化 PDF", data=st.session_state.pdf_file, file_name="分析大屏.pdf", use_container_width=True)
             st.markdown('<div class="flat-title" style="margin-top: 30px;">AI 官方智库解读正文</div>', unsafe_allow_html=True)
             st.info(st.session_state.final_text)
