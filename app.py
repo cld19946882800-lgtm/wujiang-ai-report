@@ -40,25 +40,42 @@ if 'selected_model' not in st.session_state:
 st.set_page_config(page_title="吴江区知识产权简报", layout="wide", page_icon="📈")
 
 # ==========================================
-# 💎 终极云端强制网格版 CSS
+# 💎 Uiverse 高级径向渐变网格 CSS (完美适配版)
 # ==========================================
 st.markdown("""
     <style>
-    /* 1. 强制覆盖 Streamlit 最底层容器，直接焊上网格 */
-    [data-testid="stAppViewContainer"] {
+    /* 1. 对应 Uiverse 的 .grid-wrapper 底色 */
+    .stApp {
         background-color: #f8fafc !important;
-        background-image: 
-            linear-gradient(to right, #cbd5e1 1px, transparent 1px),
-            linear-gradient(to bottom, #cbd5e1 1px, transparent 1px) !important;
-        background-size: 25px 25px !important;
+        position: relative;
     }
     
-    /* 隐藏顶部可能遮挡网格的白条 */
-    [data-testid="stHeader"] {
-        background: transparent !important;
+    /* 2. 对应 Uiverse 的 .grid-background 遮罩层 */
+    .stApp::before {
+        content: "";
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        z-index: 0;
+        background-image: 
+            linear-gradient(to right, #e2e8f0 1px, transparent 1px),
+            linear-gradient(to bottom, #e2e8f0 1px, transparent 1px);
+        background-size: 20px 30px;
+        -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 60%, transparent 100%);
+        mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 60%, transparent 100%);
+        pointer-events: none; /* 绝对不能少：防止这层不可见的膜挡住下方按钮的点击！ */
     }
 
-    /* 2. 标题框加白底，让文字在网格上能看清 */
+    /* 3. 剥离 Streamlit 的“千层饼”遮挡物，让底下的网格透上来 */
+    [data-testid="stAppViewContainer"], 
+    .main, 
+    [data-testid="stHeader"] {
+        background-color: transparent !important;
+    }
+
+    /* 以下为原有 UI 质感美化，保持在网格上方清晰可见 */
     .flat-title {
         border: 2px solid #e2e8f0; 
         background-color: rgba(255, 255, 255, 0.95); 
@@ -70,9 +87,9 @@ st.markdown("""
         border-radius: 8px; 
         margin-bottom: 20px;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        position: relative; z-index: 1;
     }
 
-    /* 3. 按钮 3D 质感 */
     .stButton > button {
         box-shadow: 0px 4px 0px 0px #94a3b8 !important;
         border-radius: 8px !important;
@@ -87,12 +104,12 @@ st.markdown("""
         box-shadow: 0px 4px 0px 0px #b91c1c !important;
     }
 
-    /* 4. 上传框变半透明白底，不被网格干扰 */
     [data-testid="stFileUploader"] {
         background-color: rgba(255, 255, 255, 0.9);
         border: 1px solid #e2e8f0;
         border-radius: 8px;
         padding: 12px;
+        position: relative; z-index: 1;
     }
     </style>
 """, unsafe_allow_html=True)
