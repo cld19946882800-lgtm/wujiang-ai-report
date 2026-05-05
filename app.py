@@ -19,12 +19,16 @@ plt.rcParams['axes.unicode_minus'] = False
 # ==========================================
 # 🚀 核心大模型双引擎配置 (云端安全保险箱版)
 # ==========================================
-# 必须从 Streamlit Secrets 安全读取，防止 API Key 被盗用！
-VOLC_API_KEY = st.secrets["VOLC_API_KEY"]
+try:
+    VOLC_API_KEY = st.secrets["VOLC_API_KEY"]
+    DEEPSEEK_API_KEY = st.secrets["DEEPSEEK_API_KEY"]
+except KeyError:
+    st.error("⚠️ 未检测到 API 密钥。请确保在 Streamlit Cloud 的 Secrets 中配置了 VOLC_API_KEY 和 DEEPSEEK_API_KEY。")
+    st.stop()
+
 VOLC_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3" 
 VOLC_MODEL_NAME = "ep-20260503224430-dsq28"
 
-DEEPSEEK_API_KEY = st.secrets["DEEPSEEK_API_KEY"]
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL_NAME = "deepseek-chat" 
 
@@ -371,4 +375,5 @@ with col_right:
             with c3: 
                 st.download_button("📈 下载可视化大屏 (PDF)", data=st.session_state.pdf_file, file_name="吴江区_专利结构可视化大屏.pdf", use_container_width=True)
             
-            st.markdown('<div class="flat-title" style="margin-top:
+            st.markdown('<div class="flat-title" style="margin-top: 30px;">AI 官方智库解读全文预览</div>', unsafe_allow_html=True)
+            st.info(st.session_state.final_text)
