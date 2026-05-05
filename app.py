@@ -17,18 +17,14 @@ plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode M
 plt.rcParams['axes.unicode_minus'] = False
 
 # ==========================================
-# 🚀 核心大模型双引擎配置 (从云端保险箱读取)
+# 🚀 核心大模型双引擎配置 (云端安全保险箱版)
 # ==========================================
-try:
-    VOLC_API_KEY = st.secrets["VOLC_API_KEY"]
-    DEEPSEEK_API_KEY = st.secrets["DEEPSEEK_API_KEY"]
-except KeyError:
-    # 为了防止本地测试报错，提供一个友好的提示（实际在云端配置好 Secrets 后不会触发）
-    st.error("⚠️ 未检测到 API 密钥。请确保在 Streamlit Cloud 的 Secrets 中配置了 VOLC_API_KEY 和 DEEPSEEK_API_KEY。")
-    st.stop()
-
+# 必须从 Streamlit Secrets 安全读取，防止 API Key 被盗用！
+VOLC_API_KEY = st.secrets["VOLC_API_KEY"]
 VOLC_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3" 
 VOLC_MODEL_NAME = "ep-20260503224430-dsq28"
+
+DEEPSEEK_API_KEY = st.secrets["DEEPSEEK_API_KEY"]
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL_NAME = "deepseek-chat" 
 
@@ -45,7 +41,7 @@ if 'selected_model' not in st.session_state:
 st.set_page_config(page_title="吴江区知识产权简报", layout="wide", page_icon="📈")
 
 # ==========================================
-# 💎 Uiverse 高级径向渐变网格 CSS (完美适配版)
+# 💎 Uiverse 高级径向渐变网格 CSS (完美沉底版)
 # ==========================================
 st.markdown("""
     <style>
@@ -54,12 +50,12 @@ st.markdown("""
         background-color: transparent !important;
     }
     
-    /* 2. 注入全局浅灰底色，防止透明背景在某些模式下发黑 */
+    /* 2. 注入全局浅灰底色 */
     html, body {
         background-color: #f8fafc !important;
     }
     
-    /* 3. 核心网格层，使用 z-index: -1 沉底，防止遮挡文字 */
+    /* 3. 核心网格层，使用 z-index: -1 沉底，绝不遮挡文字 */
     .stApp::before {
         content: "";
         position: fixed;
@@ -375,5 +371,4 @@ with col_right:
             with c3: 
                 st.download_button("📈 下载可视化大屏 (PDF)", data=st.session_state.pdf_file, file_name="吴江区_专利结构可视化大屏.pdf", use_container_width=True)
             
-            st.markdown('<div class="flat-title" style="margin-top: 30px;">AI 官方智库解读全文预览</div>', unsafe_allow_html=True)
-            st.info(st.session_state.final_text)
+            st.markdown('<div class="flat-title" style="margin-top:
