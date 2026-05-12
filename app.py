@@ -21,7 +21,7 @@ DEEPSEEK_API_KEY = "sk-0d889790af4d4eddbb912030535b49a2"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL_NAME = "deepseek-chat"
 
-DOMAINS = {
+DEFAULT_DOMAINS = {
     "知识产权": {
         "name": "知识产权",
         "icon": "📈",
@@ -140,6 +140,22 @@ DOMAINS = {
     }
 }
 
+def init_custom_domains():
+    if 'custom_domains' not in st.session_state:
+        st.session_state.custom_domains = {}
+
+def save_custom_domain(name, files_info):
+    st.session_state.custom_domains[name] = {
+        "name": name,
+        "icon": "📋",
+        "description": f"自定义分析领域：{name}",
+        "required_files": files_info,
+        "title": f"{name}分析报告"
+    }
+
+init_custom_domains()
+DOMAINS = {**DEFAULT_DOMAINS, **st.session_state.custom_domains}
+
 if 'started' not in st.session_state:
     st.session_state.started = False
 if 'processed' not in st.session_state:
@@ -211,59 +227,68 @@ def get_uploaded_files(domain_key):
 
 def process_domain_data(domain_key, uploaded_files):
     domain = DOMAINS[domain_key]
-    group_field = domain["group_by_field"]
     
     dfs = {}
-    for file_config in domain["required_files"]:
-        key = file_config["key"]
-        if uploaded_files.get(key):
-            dfs[key] = pd.read_excel(uploaded_files[key])
+    for key, file_obj in uploaded_files.items():
+        if file_obj is not None:
+            try:
+                if file_obj.name.endswith('.csv'):
+                    dfs[key] = pd.read_csv(file_obj)
+                else:
+                    dfs[key] = pd.read_excel(file_obj)
+            except:
+                pass
     
-    totals = {}
-    for metric in domain["metrics"]:
-        source = metric["source"]
-        if source in dfs:
-            if "率" in metric["label"] or "满意度" in metric["label"]:
-                totals[metric["key"]] = round(dfs[source][domain["class_field"]].mean(), 2) if len(dfs[source]) > 0 else 0
-            else:
-                totals[metric["key"]] = len(dfs[source])
+    all_dataframes = []
+    for key, df in dfs.items():
+        df['_source_file'] = key
+        all_dataframes.append(df)
     
-    summary_cols = {}
-    for metric in domain["metrics"]:
-        source = metric["source"]
-        if source in dfs and group_field in dfs[source].columns:
-            grouped = dfs[source].groupby(group_field).size()
-            summary_cols[metric["label"]] = grouped
+    combined_df = pd.concat(all_dataframes, ignore_index=True) if all_dataframes else pd.DataFrame()
     
-    if summary_cols:
-        df_summary = pd.DataFrame(summary_cols).fillna(0).astype(int)
-    else:
-        df_summary = pd.DataFrame()
+    totals = {"数据文件数": len(dfs), "总记录数": len(combined_df)}
     
-    top_field = domain.get("top_field")
-    type_field = domain.get("type_field")
-    class_field = domain.get("class_field")
-    reason_field = domain.get("reason_field")
+    numeric_cols = combined_df.select_dtypes(include=['number']).columns.tolist()
+    text_cols = combined_df.select_dtypes(include=['object']).columns.tolist()
+    
+    if numeric_cols:
+        for col in numeric_cols[:5]:
+            if not combined_df[col].isna().all():
+                totals[f"{col}总量"] = int(combined_df[col].sum())
+    
+    possible_group_fields = ['区域', '系统划分区县', '区县', '板块', '街道', '乡镇']
+    group_field = None
+    for pf in possible_group_fields:
+        if pf in combined_df.columns:
+            group_field = pf
+            break
+    
+    df_summary = pd.DataFrame()
+    if group_field and numeric_cols:
+        summary_cols = {}
+        for col in numeric_cols[:4]:
+            summary_cols[col] = combined_df.groupby(group_field)[col].sum()
+        if summary_cols:
+            df_summary = pd.DataFrame(summary_cols).fillna(0).astype(int)
     
     top_data = {}
     type_data = {}
-    class_data = {}
     reason_data = {}
     
-    first_df = list(dfs.values())[0] if dfs else None
+    if text_cols:
+        for col in text_cols[:3]:
+            vc = combined_df[col].value_counts().head(10)
+            if len(vc) > 0:
+                if not top_data:
+                    top_data = vc.to_dict()
+                elif not type_data:
+                    type_data = vc.to_dict()
+                elif not reason_data:
+                    reason_data = vc.to_dict()
     
-    if first_df is not None:
-        if top_field and top_field in first_df.columns:
-            top_data = first_df[top_field].value_counts().head(10)
-        if type_field and type_field in first_df.columns:
-            type_data = first_df[type_field].value_counts()
-        if class_field and class_field in first_df.columns:
-            first_df['大类'] = first_df[class_field].astype(str).str[:3]
-            class_data = first_df['大类'].value_counts().head(5)
-        if reason_field and reason_field in first_df.columns:
-            reason_data = first_df[reason_field].value_counts()
+    sample_columns = list(combined_df.columns[:10]) if len(combined_df.columns) > 0 else []
     
-    return totals, df_summary, top_data, type_data, class_data, reason_data
+    return totals, df_summary, top_data, type_data, reason_data, sample_columns
 
 
 def generate_domain_word(domain_key, ai_text, df_summary, top_data, type_data):
@@ -298,15 +323,14 @@ def generate_domain_word(domain_key, ai_text, df_summary, top_data, type_data):
                 row_cells[i + 1].text = str(row[col])
 
     if top_data is not None and len(top_data) > 0:
-        doc.add_heading(f'三、TOP 10 {domain.get("top_field", "主体")}榜单', level=2)
-        t2 = doc.add_table(rows=1, cols=3)
+        doc.add_heading('三、数据分布统计', level=2)
+        t2 = doc.add_table(rows=1, cols=2)
         t2.style = 'Table Grid'
-        t2.rows[0].cells[0].text = '排名'
-        t2.rows[0].cells[1].text = domain.get("top_field", "名称")
-        t2.rows[0].cells[2].text = '数量'
-        for idx, (name, count) in enumerate(top_data.items(), 1):
+        t2.rows[0].cells[0].text = '类别'
+        t2.rows[0].cells[1].text = '数量'
+        for name, count in list(top_data.items())[:10]:
             row_cells = t2.add_row().cells
-            row_cells[0].text, row_cells[1].text, row_cells[2].text = str(idx), str(name), str(count)
+            row_cells[0].text, row_cells[1].text = str(name), str(count)
 
     doc_io = io.BytesIO()
     doc.save(doc_io)
@@ -330,26 +354,27 @@ def generate_domain_pdf(domain_key, df_summary, top_data, type_data, reason_data
 
     ax2 = axes[0, 1]
     if top_data is not None and len(top_data) > 0:
-        ax2.barh(list(top_data.index)[::-1], list(top_data.values)[::-1], color='#55A868')
-        ax2.set_title(f'TOP 10 {domain.get("top_field", "主体")}', fontsize=14)
+        items = list(top_data.items())[:10]
+        ax2.barh([str(k) for k, v in items][::-1], [v for k, v in items][::-1], color='#55A868')
+        ax2.set_title('TOP 10 数据分布', fontsize=14)
     else:
         ax2.text(0.5, 0.5, '暂无数据', ha='center', va='center')
         ax2.axis('off')
 
     ax3 = axes[1, 0]
     if type_data is not None and len(type_data) > 0:
-        ax3.pie(type_data.values, labels=type_data.index, autopct='%1.1f%%', startangle=140)
-        ax3.set_title(f'{domain.get("type_field", "类型")}分布', fontsize=14)
+        ax3.pie(list(type_data.values())[:6], labels=list(type_data.keys())[:6], autopct='%1.1f%%', startangle=140)
+        ax3.set_title('类型分布', fontsize=14)
     else:
         ax3.text(0.5, 0.5, '暂无数据', ha='center', va='center')
         ax3.axis('off')
 
     ax4 = axes[1, 1]
     if reason_data is not None and len(reason_data) > 0:
-        ax4.pie(reason_data.values, labels=reason_data.index, autopct='%1.1f%%')
-        ax4.set_title(f'{domain.get("reason_field", "原因")}分析', fontsize=14)
+        ax4.pie(list(reason_data.values())[:6], labels=list(reason_data.keys())[:6], autopct='%1.1f%%')
+        ax4.set_title('原因分析', fontsize=14)
     else:
-        ax4.text(0.5, 0.5, '暂无原因数据', ha='center', va='center')
+        ax4.text(0.5, 0.5, '暂无数据', ha='center', va='center')
         ax4.axis('off')
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
@@ -366,9 +391,9 @@ def generate_domain_excel(domain_key, df_summary, top_data, type_data, reason_da
         if not df_summary.empty:
             df_summary.to_excel(writer, sheet_name='区域汇总')
         if top_data is not None and len(top_data) > 0:
-            pd.DataFrame(top_data).to_excel(writer, sheet_name='TOP10')
+            pd.DataFrame(top_data, index=[0]).T.to_excel(writer, sheet_name='数据分布')
         if type_data is not None and len(type_data) > 0:
-            pd.DataFrame(type_data).to_excel(writer, sheet_name='类型分布')
+            pd.DataFrame(type_data, index=[0]).T.to_excel(writer, sheet_name='类型分布')
     excel_io.seek(0)
     return excel_io
 
@@ -379,31 +404,74 @@ with col_left:
     st.markdown('<div class="flat-title">📁 数据上传与领域选择</div>', unsafe_allow_html=True)
 
     st.markdown("##### 🏷️ 选择分析领域")
-    domain_options = [f"{DOMAINS[k]['icon']} {DOMAINS[k]['name']}" for k in DOMAINS.keys()]
+    all_domain_options = [f"{DOMAINS[k]['icon']} {DOMAINS[k]['name']}" for k in DOMAINS.keys()]
+    all_domain_keys = list(DOMAINS.keys())
+    
     selected_domain_display = st.selectbox(
         "选择市场监管分析领域",
-        domain_options,
-        index=domain_keys.index(st.session_state.selected_domain),
+        all_domain_options,
+        index=all_domain_keys.index(st.session_state.selected_domain) if st.session_state.selected_domain in all_domain_keys else 0,
         label_visibility="collapsed"
     )
-    st.session_state.selected_domain = domain_keys[domain_options.index(selected_domain_display)]
+    st.session_state.selected_domain = all_domain_options.index(selected_domain_display) if selected_domain_display in all_domain_options else 0
+    st.session_state.selected_domain = all_domain_keys[st.session_state.selected_domain]
+    
+    with st.expander("➕ 创建自定义分析领域"):
+        custom_name = st.text_input("自定义领域名称", placeholder="如：营商环境、特种设备等")
+        st.markdown("##### 上传数据文件（可多个）")
+        
+        if 'custom_files' not in st.session_state:
+            st.session_state.custom_files = []
+        
+        col_add1, col_add2 = st.columns([3, 1])
+        with col_add1:
+            new_file_label = st.text_input("文件标签（用于AI分析识别）", placeholder="如：企业开办数据", key="new_file_label")
+        with col_add2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("➕ 添加文件", key="add_file_btn"):
+                if new_file_label:
+                    st.session_state.custom_files.append({"label": new_file_label, "key": f"custom_{len(st.session_state.custom_files)}"})
+        
+        if st.session_state.custom_files:
+            st.write("已添加的文件：")
+            for i, f in enumerate(st.session_state.custom_files):
+                st.write(f"  {i+1}. {f['label']}")
+            
+            if st.button("保存为自定义领域", type="primary"):
+                if custom_name and st.session_state.custom_files:
+                    save_custom_domain(custom_name, st.session_state.custom_files)
+                    st.session_state.custom_files = []
+                    st.success(f"已创建领域：{custom_name}")
+                    st.rerun()
+        
+        if st.session_state.custom_domains:
+            st.write("已创建的自定义领域：")
+            for name in st.session_state.custom_domains.keys():
+                st.write(f"  • {name}")
 
     domain = DOMAINS[st.session_state.selected_domain]
     st.markdown(f"*{domain['description']}*")
 
-    if 'domain_files' not in st.session_state or st.session_state.get('last_domain') != st.session_state.selected_domain:
-        st.session_state.domain_files = {}
-        st.session_state.last_domain = st.session_state.selected_domain
-
     st.markdown("##### 📤 上传业务清单")
-    uploaded_files = {}
-    for file_config in domain["required_files"]:
-        key = file_config["key"]
-        uploaded_files[key] = st.file_uploader(
-            file_config["label"],
-            type=["xlsx", "xls"],
-            key=f"file_{key}"
-        )
+    
+    if st.session_state.selected_domain in st.session_state.custom_domains:
+        uploaded_files = {}
+        custom_files = st.session_state.custom_domains[st.session_state.selected_domain]["required_files"]
+        for f in custom_files:
+            uploaded_files[f["key"]] = st.file_uploader(
+                f"《{f['label']}》",
+                type=["xlsx", "xls", "csv"],
+                key=f"file_{f['key']}"
+            )
+    else:
+        uploaded_files = {}
+        for file_config in domain["required_files"]:
+            key = file_config["key"]
+            uploaded_files[key] = st.file_uploader(
+                file_config["label"],
+                type=["xlsx", "xls", "csv"],
+                key=f"file_{key}"
+            )
 
     st.markdown("##### ⚙️ 大模型引擎")
     selected_model_input = st.selectbox(
@@ -416,8 +484,9 @@ with col_left:
     start_btn = st.button("🚀 开始自动化分析", use_container_width=True, type="primary")
 
 if start_btn:
-    if not all(uploaded_files.values()):
-        st.warning(f"⚠️ 提示：请上传全部 {len(domain['required_files'])} 份业务清单后再点击开始！")
+    uploaded_count = sum(1 for v in uploaded_files.values() if v is not None)
+    if uploaded_count == 0:
+        st.warning("⚠️ 提示：请至少上传1份业务数据后再点击开始！")
     else:
         st.session_state.selected_model = selected_model_input
         st.session_state.started = True
@@ -438,8 +507,14 @@ with col_right:
                 st.write("📥 [1/4] 正在解析表格并执行多维度分析...")
 
                 try:
-                    totals, df_summary, top_data, type_data, class_data, reason_data = process_domain_data(
+                    result = process_domain_data(
                         st.session_state.selected_domain, st.session_state.uploaded_files)
+                    if len(result) == 6:
+                        totals, df_summary, top_data, type_data, reason_data, sample_columns = result
+                        class_data = {}
+                    else:
+                        totals, df_summary, top_data, type_data, class_data, reason_data = result
+                        sample_columns = []
                 except Exception as e:
                     status.update(label="处理异常中断！", state="error", expanded=True)
                     st.error(f"🚨 【格式不规范提醒】您上传的文件内容不符合系统要求！错误详情: {str(e)}")
@@ -456,28 +531,49 @@ with col_right:
                     c_url = DEEPSEEK_BASE_URL
                     c_name = DEEPSEEK_MODEL_NAME
 
-                top3_districts = list(df_summary.index[:3]) if not df_summary.empty else []
-                top1_applicant = list(top_data.index)[0] if top_data is not None and len(top_data) > 0 else "无"
-                top1_count = list(top_data.values)[0] if top_data is not None and len(top_data) > 0 else 0
-                top_types = list(type_data.index[:3]) if type_data is not None and len(type_data) > 0 else []
-                top_ipc = list(class_data.index) if class_data is not None and len(class_data) > 0 else []
+                is_custom_domain = st.session_state.selected_domain in st.session_state.custom_domains
+                
+                if is_custom_domain:
+                    data_summary = "\n".join([f"- {k}: {v}" for k, v in totals.items()])
+                    top_items = "\n".join([f"- {k}: {v}" for k, v in list(top_data.items())[:5]]) if top_data else "暂无"
+                    
+                    prompt = f"""你是一位数据分析专家。请根据用户上传的业务数据进行分析，并撰写一份专业的分析简报。
 
-                prompt_values = {
-                    "授权总量": totals.get("授权总量", 0),
-                    "有效总量": totals.get("有效总量", 0),
-                    "投诉量": totals.get("投诉量", 0),
-                    "检查次数": totals.get("检查次数", 0),
-                    "top3_districts": ', '.join(top3_districts) if top3_districts else "暂无",
-                    "top1_applicant": top1_applicant,
-                    "top1_count": top1_count,
-                    "top_types": ', '.join(top_types) if top_types else "暂无",
-                    "top_ipc": ', '.join(top_ipc) if top_ipc else "暂无",
-                    "生产": totals.get("生产企业", 0),
-                    "经营_value": totals.get("经营企业", 0),
-                    "不良事件": totals.get("不良事件", 0),
-                }
+【数据概况】
+{data_summary}
 
-                prompt = domain["prompt_template"].format(**prompt_values)
+【关键数据分布】
+{top_items}
+
+请根据以上数据：
+1. 识别数据中的关键指标和趋势
+2. 分析主要特征和模式
+3. 用"政府智库"的专业口吻撰写一份300-400字的月度分析简报
+4. 简报应包含数据解读、问题发现、建议意见三个部分
+
+注意：如果某些数据字段不适用于你的分析，可以忽略。"""
+                else:
+                    top3_districts = list(df_summary.index[:3]) if not df_summary.empty else []
+                    top1_applicant = list(top_data.keys())[0] if top_data else "无"
+                    top1_count = list(top_data.values())[0] if top_data else 0
+                    top_types = list(type_data.keys())[:3] if type_data else []
+                    top_ipc = list(class_data.keys()) if class_data else []
+
+                    prompt_values = {
+                        "授权总量": totals.get("授权总量", 0),
+                        "有效总量": totals.get("有效总量", 0),
+                        "投诉量": totals.get("投诉量", 0),
+                        "检查次数": totals.get("检查次数", 0),
+                        "top3_districts": ', '.join(top3_districts) if top3_districts else "暂无",
+                        "top1_applicant": top1_applicant,
+                        "top1_count": top1_count,
+                        "top_types": ', '.join(top_types) if top_types else "暂无",
+                        "top_ipc": ', '.join(top_ipc) if top_ipc else "暂无",
+                        "生产": totals.get("生产企业", 0),
+                        "经营_value": totals.get("经营企业", 0),
+                        "不良事件": totals.get("不良事件", 0),
+                    }
+                    prompt = domain["prompt_template"].format(**prompt_values)
 
                 try:
                     client = OpenAI(api_key=c_key, base_url=c_url)
