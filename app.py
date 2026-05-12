@@ -154,6 +154,24 @@ def save_custom_domain(name, files_info):
     }
 
 init_custom_domains()
+DEFAULT_DOMAINS["自定义"] = {
+    "name": "自定义",
+    "icon": "📋",
+    "description": "自定义上传数据并分析",
+    "required_files": [],
+    "title": "自定义数据分析报告",
+    "prompt_template": """你是一位数据分析专家。请根据用户上传的业务数据进行分析，并撰写一份专业的分析简报。
+
+【数据概况】
+数据文件数：{数据文件数}
+总记录数：{总记录数}
+
+请根据以上数据：
+1. 识别数据中的关键指标和趋势
+2. 分析主要特征和模式
+3. 用"政府智库"的专业口吻撰写一份300-400字的月度分析简报
+4. 简报应包含数据解读、问题发现、建议意见三个部分"""
+}
 DOMAINS = {**DEFAULT_DOMAINS, **st.session_state.custom_domains}
 
 if 'started' not in st.session_state:
@@ -169,17 +187,21 @@ st.set_page_config(page_title="吴江区市场监管数据分析平台", layout=
 
 st.markdown("""
     <style>
-    [data-testid="stAppViewContainer"] { background-color: transparent !important; }
-    .main { background: transparent !important; }
-    body, html { background-color: #f8fafc !important; }
-
-    .stApp::before {
-        content: ""; position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: -1; 
-        background-image: linear-gradient(to right, #e2e8f0 1px, transparent 1px), linear-gradient(to bottom, #e2e8f0 1px, transparent 1px);
-        background-size: 20px 30px;
-        -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 60%, transparent 100%);
-        mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 60%, transparent 100%);
-        pointer-events: none; 
+    /* 科技网格背景 - 使用 fixed 定位确保不被遮挡 */
+    html, body, .stApp, [data-testid="stAppViewContainer"] {
+        background-image: 
+            linear-gradient(to right, #e2e8f0 1px, transparent 1px),
+            linear-gradient(to bottom, #e2e8f0 1px, transparent 1px) !important;
+        background-size: 20px 30px !important;
+        background-attachment: fixed !important;
+        background-color: #f8fafc !important;
+    }
+    
+    /* 内容区域半透明 */
+    .main .block-container {
+        background: rgba(255,255,255,0.95);
+        border-radius: 10px;
+        padding: 20px;
     }
 
     .flat-title {
@@ -404,74 +426,72 @@ with col_left:
     st.markdown('<div class="flat-title">📁 数据上传与领域选择</div>', unsafe_allow_html=True)
 
     st.markdown("##### 🏷️ 选择分析领域")
-    all_domain_options = [f"{DOMAINS[k]['icon']} {DOMAINS[k]['name']}" for k in DOMAINS.keys()]
-    all_domain_keys = list(DOMAINS.keys())
-    
+    preset_domains = [
+        ("知识产权", "📈", "专利申请、授权、失效、PCT等数据分析"),
+        ("投诉举报", "📞", "12345投诉举报数据分析"),
+        ("食品安全", "🍱", "食品安全监管、抽检、处罚数据分析"),
+        ("医疗器械", "🏥", "医疗器械生产、经营、监管数据分析"),
+        ("自定义", "📋", "自定义上传数据并分析")
+    ]
+
+    domain_options = [f"{d[1]} {d[0]}" for d in preset_domains]
+    domain_keys = [d[0] for d in preset_domains]
+
     selected_domain_display = st.selectbox(
         "选择市场监管分析领域",
-        all_domain_options,
-        index=all_domain_keys.index(st.session_state.selected_domain) if st.session_state.selected_domain in all_domain_keys else 0,
+        domain_options,
+        index=domain_keys.index(st.session_state.selected_domain) if st.session_state.selected_domain in domain_keys else 0,
         label_visibility="collapsed"
     )
-    st.session_state.selected_domain = all_domain_options.index(selected_domain_display) if selected_domain_display in all_domain_options else 0
-    st.session_state.selected_domain = all_domain_keys[st.session_state.selected_domain]
-    
-    with st.expander("➕ 创建自定义分析领域"):
-        custom_name = st.text_input("自定义领域名称", placeholder="如：营商环境、特种设备等")
-        st.markdown("##### 上传数据文件（可多个）")
-        
-        if 'custom_files' not in st.session_state:
-            st.session_state.custom_files = []
-        
-        col_add1, col_add2 = st.columns([3, 1])
-        with col_add1:
-            new_file_label = st.text_input("文件标签（用于AI分析识别）", placeholder="如：企业开办数据", key="new_file_label")
-        with col_add2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("➕ 添加文件", key="add_file_btn"):
-                if new_file_label:
-                    st.session_state.custom_files.append({"label": new_file_label, "key": f"custom_{len(st.session_state.custom_files)}"})
-        
-        if st.session_state.custom_files:
-            st.write("已添加的文件：")
-            for i, f in enumerate(st.session_state.custom_files):
-                st.write(f"  {i+1}. {f['label']}")
-            
-            if st.button("保存为自定义领域", type="primary"):
-                if custom_name and st.session_state.custom_files:
-                    save_custom_domain(custom_name, st.session_state.custom_files)
-                    st.session_state.custom_files = []
-                    st.success(f"已创建领域：{custom_name}")
-                    st.rerun()
-        
-        if st.session_state.custom_domains:
-            st.write("已创建的自定义领域：")
-            for name in st.session_state.custom_domains.keys():
-                st.write(f"  • {name}")
 
-    domain = DOMAINS[st.session_state.selected_domain]
-    st.markdown(f"*{domain['description']}*")
+    selected_idx = domain_options.index(selected_domain_display)
+    st.session_state.selected_domain = domain_keys[selected_idx]
+
+    domain_desc = ""
+    for d in preset_domains:
+        if d[0] == st.session_state.selected_domain:
+            domain_desc = d[2]
+            break
+    st.markdown(f"*{domain_desc}*")
 
     st.markdown("##### 📤 上传业务清单")
+    uploaded_files = {}
     
-    if st.session_state.selected_domain in st.session_state.custom_domains:
-        uploaded_files = {}
-        custom_files = st.session_state.custom_domains[st.session_state.selected_domain]["required_files"]
-        for f in custom_files:
-            uploaded_files[f["key"]] = st.file_uploader(
-                f"《{f['label']}》",
-                type=["xlsx", "xls", "csv"],
-                key=f"file_{f['key']}"
-            )
+    if st.session_state.selected_domain == "知识产权":
+        ip_files = [
+            {"key": "f_valid", "label": "《有效专利清单》"},
+            {"key": "f_pct", "label": "《PCT申请清单》"},
+            {"key": "f_auth", "label": "《发明授权清单》"},
+            {"key": "f_loss", "label": "《失效专利清单》"}
+        ]
+        for f in ip_files:
+            uploaded_files[f["key"]] = st.file_uploader(f["label"], type=["xlsx", "xls", "csv"], key=f"file_{f['key']}")
+    elif st.session_state.selected_domain == "自定义":
+        uploaded = st.file_uploader("上传数据文件（支持多文件）", type=["xlsx", "xls", "csv"], accept_multiple_files=True, key="custom_multi_files")
+        if uploaded:
+            for i, f in enumerate(uploaded):
+                uploaded_files[f"custom_{i}"] = f
     else:
-        uploaded_files = {}
-        for file_config in domain["required_files"]:
-            key = file_config["key"]
-            uploaded_files[key] = st.file_uploader(
-                file_config["label"],
-                type=["xlsx", "xls", "csv"],
-                key=f"file_{key}"
-            )
+        if 'dynamic_files' not in st.session_state:
+            st.session_state.dynamic_files = []
+        
+        for i, f_info in enumerate(st.session_state.dynamic_files):
+            uploaded_files[f"dyn_{i}"] = st.file_uploader(f"《{f_info['label']}》", type=["xlsx", "xls", "csv"], key=f"dyn_file_{i}")
+        
+        col_f1, col_f2 = st.columns([3, 1])
+        with col_f1:
+            new_label = st.text_input("添加文件标签", placeholder="如：企业投诉数据", key="new_dynamic_file")
+        with col_f2:
+            st.markdown("<br>")
+            if st.button("➕ 添加", key="add_dynamic"):
+                if new_label:
+                    st.session_state.dynamic_files.append({"label": new_label, "key": f"dyn_{len(st.session_state.dynamic_files)}"})
+                    st.rerun()
+        
+        if st.session_state.dynamic_files:
+            if st.button("清空文件列表", key="clear_dynamic"):
+                st.session_state.dynamic_files = []
+                st.rerun()
 
     st.markdown("##### ⚙️ 大模型引擎")
     selected_model_input = st.selectbox(
@@ -531,7 +551,7 @@ with col_right:
                     c_url = DEEPSEEK_BASE_URL
                     c_name = DEEPSEEK_MODEL_NAME
 
-                is_custom_domain = st.session_state.selected_domain in st.session_state.custom_domains
+                is_custom_domain = st.session_state.selected_domain in st.session_state.custom_domains or st.session_state.selected_domain == "自定义"
                 
                 if is_custom_domain:
                     data_summary = "\n".join([f"- {k}: {v}" for k, v in totals.items()])
@@ -560,6 +580,8 @@ with col_right:
                     top_ipc = list(class_data.keys()) if class_data else []
 
                     prompt_values = {
+                        "数据文件数": totals.get("数据文件数", 0),
+                        "总记录数": totals.get("总记录数", 0),
                         "授权总量": totals.get("授权总量", 0),
                         "有效总量": totals.get("有效总量", 0),
                         "投诉量": totals.get("投诉量", 0),
