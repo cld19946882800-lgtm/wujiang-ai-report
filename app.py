@@ -44,12 +44,27 @@ DEFAULT_DOMAINS = {
         "class_field": "主分类号",
         "reason_field": "失效原因",
         "title": "吴江区知识产权统计深度简报",
-        "prompt_template": """你是一位吴江区市场监管局（知识产权局）的高级分析师。请根据以下真实底层数据，写一段高质量的《知识产权月度产出研判简报》核心正文。
-吴江全区本期新增授权 {授权总量} 件，有效总盘达 {有效总量} 件。
-板块创新高地效应显著，【{top3_districts}】包揽了区内最多的授权量。
-全区本期研发火力最猛的头号领军企业是"{top1_applicant}"（贡献了{top1_count}件）。
-核心技术突破集中在 IPC 分类号为【{top_ipc}】的重点领域。
-要求：用"政府智库"的口吻，分两个自然段，总字数300-400字左右。"""
+        "prompt_template": """你是吴江区市场监管局（知识产权局）高级政务分析师，严格按照《苏州市知识产权统计简报》官方标准撰写，所有分析必须基于真实数据，无空泛套话。
+
+【核心数据】
+吴江区总计有效专利：{吴江区总计有效专利} 件
+有效发明专利存量：{有效发明专利存量} 件
+本月新增发明专利授权：{本月新增发明专利授权} 件
+本月PCT国际申请：{本月PCT国际申请} 件
+本月失效专利：{本月失效专利} 件
+发明专利占比：{发明专利占比}%
+苏州大学授权专利数量：{苏州大学授权专利数量} 件
+
+【区域分布】TOP3：{top3_districts}
+【创新主体结构】{type_data}
+【授权领军主体TOP10】{top_applicant}
+【核心技术领域】IPC主分类号TOP10：{top_ipc}
+
+要求：
+1. 结构严格遵循苏州官方简报7段式标准：一、宏观发展概况；二、核心指标动态分析；三、区域创新格局分析；四、创新主体结构分析；五、核心技术赛道分析；六、专利维持风险提示；七、工作推进建议
+2. 核心指标必须完整呈现，补充月度环比、区域贡献度、专利质量对标内容，完全对齐苏州简报专业口径
+3. 政府智库专业口吻，重点突出吴江区整体创新规模、区域引领作用、领军主体优势、核心技术赛道特点
+4. 字数严格控制在300-400字，符合月度正式工作简报的规范格式"""
     },
     "投诉举报": {
         "name": "投诉举报",
@@ -248,101 +263,52 @@ def get_uploaded_files(domain_key):
     return files
 
 def process_domain_data(domain_key, uploaded_files):
-    domain = DOMAINS[domain_key]
-    
     dfs = {}
     for key, file_obj in uploaded_files.items():
         if file_obj is not None:
             try:
-                if file_obj.name.endswith('.csv'):
-                    dfs[key] = pd.read_csv(file_obj)
-                else:
-                    df_temp = pd.read_excel(file_obj)
-                    if len(df_temp) > 0:
-                        dfs[key] = df_temp
-            except Exception as e:
+                df = pd.read_csv(file_obj) if file_obj.name.endswith('.csv') else pd.read_excel(file_obj)
+                if not df.empty:
+                    dfs[key] = df
+            except:
                 pass
+    all_dfs = [df for df in dfs.values() if not df.empty]
+    combined_df = pd.concat(all_dfs, ignore_index=True) if all_dfs else pd.DataFrame()
+    if combined_df.empty:
+        return {}, pd.DataFrame(), {}, {}, {}, {}, {}, {}, {}
     
-    all_dataframes = [df for df in dfs.values() if df is not None]
-    combined_df = pd.concat(all_dataframes, ignore_index=True) if all_dataframes else pd.DataFrame()
+    all_cols = combined_df.columns.tolist()
+    totals = {"文件数": len(dfs), "总记录数": len(combined_df)}
     
-    if len(combined_df) == 0:
-        return {}, pd.DataFrame(), {}, {}, {}, []
-    
-    all_cols = list(combined_df.columns)
-    # 最后修复：彻底扔掉日期列，只留地区和类型
-    if "投诉日期" in all_cols:
-        all_cols.remove("投诉日期")
-    totals = {"数据文件数": len(dfs), "总记录数": len(combined_df)}
-    text_cols = combined_df.select_dtypes(include=['object']).columns.tolist()
-    # 同时也从text_cols中移除
-    if "投诉日期" in text_cols:
-        text_cols.remove("投诉日期")
+    group_field = next((c for c in ["区域","地区","投诉地区","举报地区","系统划分区县"] if c in all_cols), None)
+    type_field = next((c for c in ["类型","投诉类型","举报类型","问题类型","食品类别","企业类型","专利权人类型"] if c in all_cols), None)
+    reason_field = next((c for c in ["状态","处理状态","办理状态","失效原因","问题类别"] if c in all_cols), None)
+    class_field = next((c for c in ["主分类号","产品分类","行业分类"] if c in all_cols), None)
+    name_field = next((c for c in ["专利权人名称","企业名称","经营主体"] if c in all_cols), None)
 
-    # ====================== 终极锁死：永远不抓编号、不抓日期 ======================
-    group_by_field = None
-    type_field = None
-    reason_field = None
+    df_summary = pd.DataFrame({'数量': combined_df[group_field].value_counts().head(15)}) if group_field else pd.DataFrame()
+    top_data = combined_df[group_field].value_counts().head(15).to_dict() if group_field else {}
+    type_data = combined_df[type_field].value_counts().to_dict() if type_field else {}
+    class_data = combined_df[class_field].value_counts().head(10).to_dict() if class_field else {}
+    reason_data = combined_df[reason_field].value_counts().to_dict() if reason_field else {}
+    name_data = combined_df[name_field].value_counts().head(10).to_dict() if name_field else {}
 
-    # 1. 优先匹配标准字段（投诉/知识产权通用）
-    if "投诉地区" in all_cols:
-        group_by_field = "投诉地区"
-    if "投诉类型" in all_cols:
-        type_field = "投诉类型"
-    if "系统划分区县" in all_cols:
-        group_by_field = "系统划分区县"
-    if "专利权人类型" in all_cols:
-        type_field = "专利权人类型"
+    if reason_field:
+        totals["已办结"] = combined_df[reason_field].astype(str).str.contains("已办结").sum()
+        totals["办结率"] = round(totals["已办结"]/len(combined_df)*100,1) if len(combined_df)>0 else 0
 
-    # 2. 通用兜底：彻底拉黑编号/日期，只留地区/类型
-    if not group_by_field or not type_field:
-        black_list = ["编号", "id", "ID", "序号", "TS", "日期", "时间", "年", "月", "日", "-", "/"]
-        valid_cols = []
-        for col in text_cols:
-            col_name = str(col).lower()
-            # 跳过黑名单
-            if any(kw in col_name for kw in black_list):
-                continue
-            # 跳过全是编号的列
-            if combined_df[col].astype(str).str.match(r'^TS\d+|^\d+$').mean() > 0.5:
-                continue
-            valid_cols.append(col)
-        
-        # 分配区域、类型
-        if len(valid_cols) >= 1:
-            group_by_field = valid_cols[0]
-        if len(valid_cols) >= 2:
-            type_field = valid_cols[1]
-
-    # 统计数据
-    df_summary = pd.DataFrame()
-    if group_by_field and group_by_field in all_cols:
-        counts = combined_df[group_by_field].value_counts().head(15)
-        if not counts.empty:
-            df_summary = pd.DataFrame({'数量': counts})
-    
-    top_data = combined_df[group_by_field].value_counts().head(15).to_dict() if (group_by_field and group_by_field in all_cols) else {}
-    type_data = combined_df[type_field].value_counts().to_dict() if (type_field and type_field in all_cols) else {}
-    reason_data = {}
-
-    # 投诉举报专属指标
-    if domain_key == "投诉举报" and "处理状态" in all_cols:
-        status_counts = combined_df["处理状态"].value_counts()
-        totals["已办结"] = status_counts.get("已办结", 0)
-        totals["处理中"] = status_counts.get("处理中", 0)
-        totals["逾期办结"] = status_counts.get("逾期办结", 0)
-        totals["办结率"] = round(totals["已办结"] / totals["总记录数"] * 100, 1) if totals["总记录数"] else 0
-
-    all_cols_info = {"列名": all_cols, "示例数据": combined_df.head(3).to_dict("records")}
-    return totals, df_summary, top_data, type_data, reason_data, all_cols_info
+    totals["苏州大学关联数据"] = sum(1 for v in combined_df.astype(str).agg(' '.join, axis=1) if "苏州大学" in v)
+    all_cols_info = {"列名": all_cols, "示例": combined_df.head(3).to_dict("records")}
+    return totals, df_summary, top_data, type_data, class_data, reason_data, all_cols_info, name_data, dfs
 
 
-def generate_domain_word(domain_key, ai_text, df_summary, top_data, type_data):
+def generate_domain_word(domain_key, ai_text, df_summary, top_data, type_data, class_data=None, name_data=None):
     domain = DOMAINS[domain_key]
     doc = Document()
     doc.styles['Normal'].font.name = u'仿宋'
     doc.styles['Normal']._element.rPr.rFonts.set(qn('w:eastAsia'), u'仿宋')
 
+    # 标题
     title = doc.add_heading('', level=0)
     run = title.add_run(domain["title"])
     run.font.name = u'方正小标宋简体'
@@ -351,11 +317,13 @@ def generate_domain_word(domain_key, ai_text, df_summary, top_data, type_data):
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     doc.add_paragraph('=' * 45).alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    doc.add_heading('一、宏观数据分析', level=1)
+    # 核心分析（必选）
+    doc.add_heading('一、核心数据分析', level=1)
     doc.add_paragraph(ai_text)
 
-    doc.add_heading('二、区域分布明细表', level=2)
-    if not df_summary.empty:
+    # 区域分布：有数据才加
+    if not df_summary.empty and top_data:
+        doc.add_heading('二、区域分布明细', level=2)
         cols = len(df_summary.columns)
         t1 = doc.add_table(rows=1, cols=cols + 1)
         t1.style = 'Table Grid'
@@ -368,14 +336,37 @@ def generate_domain_word(domain_key, ai_text, df_summary, top_data, type_data):
             for i, col in enumerate(df_summary.columns):
                 row_cells[i + 1].text = str(row[col])
 
-    if top_data is not None and len(top_data) > 0:
-        doc.add_heading('三、数据分布统计', level=2)
+    # 类型分布：有数据才加
+    if type_data:
+        doc.add_heading('三、类型分布统计', level=2)
         t2 = doc.add_table(rows=1, cols=2)
         t2.style = 'Table Grid'
-        t2.rows[0].cells[0].text = '类别'
+        t2.rows[0].cells[0].text = '类型'
         t2.rows[0].cells[1].text = '数量'
-        for name, count in list(top_data.items())[:10]:
+        for name, count in list(type_data.items())[:10]:
             row_cells = t2.add_row().cells
+            row_cells[0].text, row_cells[1].text = str(name), str(count)
+
+    # 技术领域：知识产权+有数据才加
+    if domain_key == "知识产权" and class_data:
+        doc.add_heading('四、核心技术领域分布', level=2)
+        t3 = doc.add_table(rows=1, cols=2)
+        t3.style = 'Table Grid'
+        t3.rows[0].cells[0].text = 'IPC分类号'
+        t3.rows[0].cells[1].text = '专利数量'
+        for name, count in list(class_data.items())[:10]:
+            row_cells = t3.add_row().cells
+            row_cells[0].text, row_cells[1].text = str(name), str(count)
+
+    # 主体排名：有数据才加
+    if name_data:
+        doc.add_heading('五、核心主体TOP10', level=2)
+        t4 = doc.add_table(rows=1, cols=2)
+        t4.style = 'Table Grid'
+        t4.rows[0].cells[0].text = '主体名称'
+        t4.rows[0].cells[1].text = '数量'
+        for name, count in list(name_data.items())[:10]:
+            row_cells = t4.add_row().cells
             row_cells[0].text, row_cells[1].text = str(name), str(count)
 
     doc_io = io.BytesIO()
@@ -384,69 +375,104 @@ def generate_domain_word(domain_key, ai_text, df_summary, top_data, type_data):
     return doc_io
 
 
-def generate_domain_pdf(domain_key, df_summary, top_data, type_data, reason_data):
+def generate_domain_pdf(domain_key, df_summary, top_data, type_data, reason_data, name_data=None):
     domain = DOMAINS[domain_key]
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    plt.rcParams['font.sans-serif'] = ['SimHei', 'WenQuanYi Micro Hei']
+    plt.rcParams['axes.unicode_minus'] = False
+
+    # 动态计算图表数量：有数据的维度才占位置
+    plot_count = sum([1 for x in [type_data, top_data, name_data, reason_data] if x])
+    if plot_count == 0:
+        plot_count = 1
+    rows = (plot_count + 1) // 2
+    cols = 2 if plot_count > 1 else 1
+
+    fig, axes = plt.subplots(rows, cols, figsize=(16, 8 * rows))
     fig.suptitle(f'{domain["name"]}分析大屏', fontsize=22, fontweight='bold', y=0.98)
+    axes = axes.flatten() if plot_count > 1 else [axes]
+    current_ax = 0
 
-    ax1 = axes[0, 0]
-    if not df_summary.empty:
-        first_col = df_summary.columns[0]
-        ax1.bar(df_summary.index, df_summary[first_col], color='#4C72B0')
-        ax1.set_title(f'{domain["name"]}各区域分布', fontsize=14)
-        ax1.tick_params(axis='x', rotation=30)
-    else:
-        ax1.text(0.5, 0.5, '暂无数据', ha='center', va='center')
+    # 类型分布：有数据才画
+    if type_data:
+        ax = axes[current_ax]
+        ax.bar(list(type_data.keys()), list(type_data.values()), color='#4C72B0')
+        ax.set_title('类型分布', fontsize=14)
+        ax.tick_params(axis='x', rotation=30)
+        current_ax += 1
 
-    ax2 = axes[0, 1]
-    if top_data is not None and len(top_data) > 0:
+    # 区域分布：有数据才画
+    if top_data:
+        ax = axes[current_ax]
         items = list(top_data.items())[:10]
-        ax2.barh([str(k) for k, v in items][::-1], [v for k, v in items][::-1], color='#55A868')
-        ax2.set_title('TOP 10 数据分布', fontsize=14)
-    else:
-        ax2.text(0.5, 0.5, '暂无数据', ha='center', va='center')
-        ax2.axis('off')
+        ax.barh([str(k) for k, v in items][::-1], [v for k, v in items][::-1], color='#55A868')
+        ax.set_title('区域分布TOP10', fontsize=14)
+        current_ax += 1
 
-    ax3 = axes[1, 0]
-    if type_data is not None and len(type_data) > 0:
-        ax3.pie(list(type_data.values())[:6], labels=list(type_data.keys())[:6], autopct='%1.1f%%', startangle=140)
-        ax3.set_title('类型分布', fontsize=14)
-    else:
-        ax3.text(0.5, 0.5, '暂无数据', ha='center', va='center')
-        ax3.axis('off')
+    # 主体排名：有数据才画
+    if name_data:
+        ax = axes[current_ax]
+        items = list(name_data.items())[:10]
+        ax.barh([str(k) for k, v in items][::-1], [v for k, v in items][::-1], color='#F59E0B')
+        ax.set_title('核心主体TOP10', fontsize=14)
+        current_ax += 1
 
-    ax4 = axes[1, 1]
-    if reason_data is not None and len(reason_data) > 0:
-        ax4.pie(list(reason_data.values())[:6], labels=list(reason_data.keys())[:6], autopct='%1.1f%%')
-        ax4.set_title('原因分析', fontsize=14)
-    else:
-        ax4.text(0.5, 0.5, '暂无数据', ha='center', va='center')
-        ax4.axis('off')
+    # 原因/状态分布：有数据才画
+    if reason_data:
+        ax = axes[current_ax]
+        ax.pie(list(reason_data.values())[:6], labels=list(reason_data.keys())[:6], autopct='%1.1f%%', startangle=140)
+        ax.set_title('状态/原因分布', fontsize=14)
+        current_ax += 1
+
+    # 剩余空图表隐藏
+    for ax in axes[current_ax:]:
+        ax.axis('off')
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     pdf_io = io.BytesIO()
-    plt.savefig(pdf_io, format='pdf')
+    plt.savefig(pdf_io, format='pdf', bbox_inches='tight')
     plt.close(fig)
     pdf_io.seek(0)
     return pdf_io
 
 
-def generate_domain_excel(domain_key, df_summary, top_data, type_data, reason_data):
+def generate_domain_excel(domain_key, totals, df_summary, top_data, type_data, class_data, name_data=None, dfs=None):
     excel_io = io.BytesIO()
     with pd.ExcelWriter(excel_io, engine='openpyxl') as writer:
         has_data = False
         
+        # 数据总览：必选
+        overview_df = pd.DataFrame(list(totals.items()), columns=['指标名称', '数值'])
+        overview_df.to_excel(writer, sheet_name='数据总览', index=False)
+        has_data = True
+        
+        # 区域分布：有数据才加
         if not df_summary.empty:
-            df_summary.to_excel(writer, sheet_name='区域汇总')
+            df_summary.reset_index().rename(columns={'index': '区域名称'}).to_excel(writer, sheet_name='区域分布明细', index=False)
             has_data = True
         
-        if top_data is not None and len(top_data) > 0:
-            pd.DataFrame(list(top_data.items()), columns=['类别', '数量']).to_excel(writer, sheet_name='数据分布', index=False)
+        # 类型分布：有数据才加
+        if type_data:
+            type_df = pd.DataFrame(list(type_data.items()), columns=['类型', '数量'])
+            type_df.to_excel(writer, sheet_name='类型分布统计', index=False)
             has_data = True
         
-        if type_data is not None and len(type_data) > 0:
-            pd.DataFrame(list(type_data.items()), columns=['类型', '数量']).to_excel(writer, sheet_name='类型分布', index=False)
+        # 技术领域：知识产权+有数据才加
+        if domain_key == "知识产权" and class_data:
+            class_df = pd.DataFrame(list(class_data.items()), columns=['IPC分类号', '数量'])
+            class_df.to_excel(writer, sheet_name='技术领域分布', index=False)
             has_data = True
+        
+        # 主体排名：有数据才加
+        if name_data:
+            name_df = pd.DataFrame(list(name_data.items()), columns=['主体名称', '数量'])
+            name_df.to_excel(writer, sheet_name='核心主体TOP10', index=False)
+            has_data = True
+        
+        # 原始数据：有文件才加
+        if dfs:
+            for key, df in dfs.items():
+                df.to_excel(writer, sheet_name='原始数据明细', index=False)
+                has_data = True
         
         if not has_data:
             pd.DataFrame({'提示': ['无数据']}).to_excel(writer, sheet_name='汇总')
@@ -573,12 +599,17 @@ with col_right:
                 try:
                     result = process_domain_data(
                         st.session_state.selected_domain, st.session_state.uploaded_files)
-                    if len(result) == 6:
+                    if len(result) == 9:
+                        totals, df_summary, top_data, type_data, class_data, reason_data, sample_columns, name_data, dfs = result
+                    elif len(result) == 7:
+                        totals, df_summary, top_data, type_data, class_data, reason_data, sample_columns = result
+                        name_data = {}
+                        dfs = {}
+                    else:
                         totals, df_summary, top_data, type_data, reason_data, sample_columns = result
                         class_data = {}
-                    else:
-                        totals, df_summary, top_data, type_data, class_data, reason_data = result
-                        sample_columns = []
+                        name_data = {}
+                        dfs = {}
                 except Exception as e:
                     status.update(label="处理异常中断！", state="error", expanded=True)
                     st.error(f"🚨 【格式不规范提醒】您上传的文件内容不符合系统要求！错误详情: {str(e)}")
@@ -597,74 +628,34 @@ with col_right:
 
                 is_custom_domain = st.session_state.selected_domain in st.session_state.custom_domains or st.session_state.selected_domain == "自定义" or st.session_state.selected_domain in ["投诉举报", "食品安全", "医疗器械"]
                 
-                if is_custom_domain:
-                    data_summary = f"数据文件数：{totals.get('数据文件数', 0)}，总记录数：{totals.get('总记录数', 0)}"
-                    
-                    region_dist = f"区域分布：{', '.join([f'{k}({v}条)' for k, v in list(top_data.items())[:8]])}" if top_data else "无区域数据"
-                    
-                    type_dist = ""
-                    if type_data:
-                        type_dist = f"类型分布：{', '.join([f'{k}({v}条)' for k, v in list(type_data.items())[:8]])}"
-                    
-                    col_info = sample_columns.get('列名', []) if isinstance(sample_columns, dict) else []
-                    col_str = ", ".join(col_info[:15]) if col_info else "未知"
-                    
-                    prompt = f"""你是一位市场监管局的高级数据分析师。请根据以下业务数据撰写一份专业的月度分析简报。
+                # 动态拼接Prompt：只加有真实数据的维度，无数据直接跳过
+                prompt_parts = ["你是政务数据分析师，基于本次上传的业务数据写300-400字专业简报，禁止套话、禁止无数据表述，所有内容必须基于本次上传的真实数据。"]
+                prompt_parts.append(f"\n【核心数据】共上传{totals['文件数']}个文件，总数据{totals['总记录数']}条")
 
-【数据概况】
-{data_summary}
-总记录数：{totals.get('总记录数', 0)} 条
+                # 有类型数据才加
+                if type_data:
+                    type_desc = f"类型分布：{', '.join([f'{k}{v}条' for k,v in list(type_data.items())[:5]])}"
+                    prompt_parts.append(type_desc)
+                # 有区域数据才加
+                if top_data:
+                    region_desc = f"区域分布：{', '.join([f'{k}{v}条' for k,v in list(top_data.items())[:5]])}"
+                    prompt_parts.append(region_desc)
+                # 有办结数据才加
+                if "已办结" in totals and totals["已办结"] > 0:
+                    deal_desc = f"已办结{totals['已办结']}件，办结率{totals['办结率']}%"
+                    prompt_parts.append(deal_desc)
+                # 有主体数据才加
+                if name_data:
+                    name_desc = f"涉及主体共{len(name_data)}家，TOP3：{', '.join(list(name_data.keys())[:3])}"
+                    prompt_parts.append(name_desc)
+                # 有苏州大学相关数据才加
+                if totals.get("苏州大学关联数据", 0) > 0:
+                    suda_desc = f"苏州大学相关数据{totals['苏州大学关联数据']}条"
+                    prompt_parts.append(suda_desc)
 
-【数据列名】
-{col_str}
-
-【区域分布】（按数量降序）
-{region_dist}
-
-【类型分布】
-{type_dist}
-
-请用"政府智库"的专业口吻，撰写300-400字的月度分析简报，包含：
-1. 数据概况：总数据量、各区域分布情况
-2. 特征分析：找出数据集中的热点区域、类型分布等
-3. 问题发现：识别出的主要问题
-4. 建议意见：基于数据提出工作建议
-
-要求：基于真实数据进行分析，所有统计数据必须准确。"""
-                else:
-                    data_summary = f"数据文件数：{totals.get('数据文件数', 0)}，总记录数：{totals.get('总记录数', 0)}"
-                    
-                    region_dist = f"区域分布：{', '.join([f'{k}({v}条)' for k, v in list(top_data.items())[:8]])}" if top_data else "无区域数据"
-                    
-                    type_dist = ""
-                    if type_data:
-                        type_dist = f"类型分布：{', '.join([f'{k}({v}条)' for k, v in list(type_data.items())[:8]])}"
-                    
-                    col_info = sample_columns.get('列名', []) if isinstance(sample_columns, dict) else []
-                    col_str = ", ".join(col_info[:15]) if col_info else "未知"
-                    
-                    prompt = f"""你是一位市场监管局的高级数据分析师。请根据以下业务数据撰写一份专业的月度分析简报。
-
-【数据概况】
-{data_summary}
-总记录数：{totals.get('总记录数', 0)} 条
-
-【数据列名】
-{col_str}
-
-【区域分布】（按数量降序）
-{region_dist}
-
-【类型分布】
-{type_dist}
-
-请用"政府智库"的专业口吻，撰写300-400字的月度分析简报，包含：
-1. 数据概况：总数据量、各区域分布情况
-2. 特征分析：找出数据集中的热点区域、类型分布等
-3. 问题发现：识别出的主要问题
-4. 建议意见：基于数据提出工作建议
-
-要求：基于真实数据进行分析，所有统计数据必须准确。"""
+                # 拼接最终Prompt
+                prompt = "。".join(prompt_parts) + """。
+要求：1.数据概况 2.核心特征分析 3.风险提示 4.工作建议，政府正式口吻，不得提及本次数据中没有的任何内容。"""
 
                 try:
                     client = OpenAI(api_key=c_key, base_url=c_url)
@@ -688,12 +679,10 @@ with col_right:
                     st.stop()
 
                 st.write("📑 [3/4] 正在生成 Word、Excel、PDF 多形态报告...")
-                st.session_state.word_file = generate_domain_word(
-                    st.session_state.selected_domain, final_text, df_summary, top_data, type_data)
-                st.session_state.excel_file = generate_domain_excel(
-                    st.session_state.selected_domain, df_summary, top_data, type_data, reason_data)
+                st.session_state.word_file = generate_domain_word(st.session_state.selected_domain, final_text, df_summary, top_data, type_data, class_data, name_data)
+                st.session_state.excel_file = generate_domain_excel(st.session_state.selected_domain, totals, df_summary, top_data, type_data, class_data, name_data, dfs)
                 st.session_state.pdf_file = generate_domain_pdf(
-                    st.session_state.selected_domain, df_summary, top_data, type_data, reason_data)
+                    st.session_state.selected_domain, df_summary, top_data, type_data, reason_data, name_data)
                 st.session_state.final_text = final_text
                 st.session_state.domain_title = domain["title"]
 
