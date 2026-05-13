@@ -15,7 +15,7 @@ plt.rcParams['axes.unicode_minus'] = False
 
 VOLC_API_KEY = "ark-2358e229-f997-477c-a223-f71a3c1d67f4-13835"
 VOLC_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
-VOLC_MODEL_NAME = "ep-20260503224430-dsq28"
+VOLC_MODEL_NAME = "ep-20260513185957-wfw8z"
 
 DEEPSEEK_API_KEY = "sk-0d889790af4d4eddbb912030535b49a2"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
@@ -61,17 +61,17 @@ DEFAULT_DOMAINS = {
             {"key": "f_resolve", "label": "《办结清单》", "desc": "已办结案件清单"},
             {"key": "f_satisfaction", "label": "《满意度评价》", "desc": "群众满意度评价"}
         ],
-        "group_by_field": "区域",
+        "group_by_field": "投诉地区",
         "metrics": [
             {"key": "投诉量", "source": "f_complaint", "label": "投诉量(件)"},
             {"key": "举报量", "source": "f_report", "label": "举报量(件)"},
             {"key": "办结量", "source": "f_resolve", "label": "办结量(件)"},
             {"key": "满意度", "source": "f_satisfaction", "label": "满意度(%)"}
         ],
-        "top_field": "投诉人",
+        "top_field": "投诉地区",
         "type_field": "投诉类型",
         "class_field": "行业分类",
-        "reason_field": "投诉原因",
+        "reason_field": "处理状态",
         "title": "吴江区投诉举报情况分析简报",
         "prompt_template": """你是一位吴江区市场监管局的高级分析师。请根据以下数据，写一段高质量的《投诉举报月度分析简报》。
 本月共受理投诉 {投诉量} 件，举报 {举报量} 件。
@@ -257,60 +257,84 @@ def process_domain_data(domain_key, uploaded_files):
                 if file_obj.name.endswith('.csv'):
                     dfs[key] = pd.read_csv(file_obj)
                 else:
-                    dfs[key] = pd.read_excel(file_obj)
-            except:
+                    df_temp = pd.read_excel(file_obj)
+                    if len(df_temp) > 0:
+                        dfs[key] = df_temp
+            except Exception as e:
                 pass
     
-    all_dataframes = []
-    for key, df in dfs.items():
-        df['_source_file'] = key
-        all_dataframes.append(df)
-    
+    all_dataframes = [df for df in dfs.values() if df is not None]
     combined_df = pd.concat(all_dataframes, ignore_index=True) if all_dataframes else pd.DataFrame()
     
+    if len(combined_df) == 0:
+        return {}, pd.DataFrame(), {}, {}, {}, []
+    
+    all_cols = list(combined_df.columns)
+    # 最后修复：彻底扔掉日期列，只留地区和类型
+    if "投诉日期" in all_cols:
+        all_cols.remove("投诉日期")
     totals = {"数据文件数": len(dfs), "总记录数": len(combined_df)}
-    
-    numeric_cols = combined_df.select_dtypes(include=['number']).columns.tolist()
     text_cols = combined_df.select_dtypes(include=['object']).columns.tolist()
-    
-    if numeric_cols:
-        for col in numeric_cols[:5]:
-            if not combined_df[col].isna().all():
-                totals[f"{col}总量"] = int(combined_df[col].sum())
-    
-    possible_group_fields = ['区域', '系统划分区县', '区县', '板块', '街道', '乡镇']
-    group_field = None
-    for pf in possible_group_fields:
-        if pf in combined_df.columns:
-            group_field = pf
-            break
-    
+    # 同时也从text_cols中移除
+    if "投诉日期" in text_cols:
+        text_cols.remove("投诉日期")
+
+    # ====================== 终极锁死：永远不抓编号、不抓日期 ======================
+    group_by_field = None
+    type_field = None
+    reason_field = None
+
+    # 1. 优先匹配标准字段（投诉/知识产权通用）
+    if "投诉地区" in all_cols:
+        group_by_field = "投诉地区"
+    if "投诉类型" in all_cols:
+        type_field = "投诉类型"
+    if "系统划分区县" in all_cols:
+        group_by_field = "系统划分区县"
+    if "专利权人类型" in all_cols:
+        type_field = "专利权人类型"
+
+    # 2. 通用兜底：彻底拉黑编号/日期，只留地区/类型
+    if not group_by_field or not type_field:
+        black_list = ["编号", "id", "ID", "序号", "TS", "日期", "时间", "年", "月", "日", "-", "/"]
+        valid_cols = []
+        for col in text_cols:
+            col_name = str(col).lower()
+            # 跳过黑名单
+            if any(kw in col_name for kw in black_list):
+                continue
+            # 跳过全是编号的列
+            if combined_df[col].astype(str).str.match(r'^TS\d+|^\d+$').mean() > 0.5:
+                continue
+            valid_cols.append(col)
+        
+        # 分配区域、类型
+        if len(valid_cols) >= 1:
+            group_by_field = valid_cols[0]
+        if len(valid_cols) >= 2:
+            type_field = valid_cols[1]
+
+    # 统计数据
     df_summary = pd.DataFrame()
-    if group_field and numeric_cols:
-        summary_cols = {}
-        for col in numeric_cols[:4]:
-            summary_cols[col] = combined_df.groupby(group_field)[col].sum()
-        if summary_cols:
-            df_summary = pd.DataFrame(summary_cols).fillna(0).astype(int)
+    if group_by_field and group_by_field in all_cols:
+        counts = combined_df[group_by_field].value_counts().head(15)
+        if not counts.empty:
+            df_summary = pd.DataFrame({'数量': counts})
     
-    top_data = {}
-    type_data = {}
+    top_data = combined_df[group_by_field].value_counts().head(15).to_dict() if (group_by_field and group_by_field in all_cols) else {}
+    type_data = combined_df[type_field].value_counts().to_dict() if (type_field and type_field in all_cols) else {}
     reason_data = {}
-    
-    if text_cols:
-        for col in text_cols[:3]:
-            vc = combined_df[col].value_counts().head(10)
-            if len(vc) > 0:
-                if not top_data:
-                    top_data = vc.to_dict()
-                elif not type_data:
-                    type_data = vc.to_dict()
-                elif not reason_data:
-                    reason_data = vc.to_dict()
-    
-    sample_columns = list(combined_df.columns[:10]) if len(combined_df.columns) > 0 else []
-    
-    return totals, df_summary, top_data, type_data, reason_data, sample_columns
+
+    # 投诉举报专属指标
+    if domain_key == "投诉举报" and "处理状态" in all_cols:
+        status_counts = combined_df["处理状态"].value_counts()
+        totals["已办结"] = status_counts.get("已办结", 0)
+        totals["处理中"] = status_counts.get("处理中", 0)
+        totals["逾期办结"] = status_counts.get("逾期办结", 0)
+        totals["办结率"] = round(totals["已办结"] / totals["总记录数"] * 100, 1) if totals["总记录数"] else 0
+
+    all_cols_info = {"列名": all_cols, "示例数据": combined_df.head(3).to_dict("records")}
+    return totals, df_summary, top_data, type_data, reason_data, all_cols_info
 
 
 def generate_domain_word(domain_key, ai_text, df_summary, top_data, type_data):
@@ -410,12 +434,22 @@ def generate_domain_pdf(domain_key, df_summary, top_data, type_data, reason_data
 def generate_domain_excel(domain_key, df_summary, top_data, type_data, reason_data):
     excel_io = io.BytesIO()
     with pd.ExcelWriter(excel_io, engine='openpyxl') as writer:
+        has_data = False
+        
         if not df_summary.empty:
             df_summary.to_excel(writer, sheet_name='区域汇总')
+            has_data = True
+        
         if top_data is not None and len(top_data) > 0:
-            pd.DataFrame(top_data, index=[0]).T.to_excel(writer, sheet_name='数据分布')
+            pd.DataFrame(list(top_data.items()), columns=['类别', '数量']).to_excel(writer, sheet_name='数据分布', index=False)
+            has_data = True
+        
         if type_data is not None and len(type_data) > 0:
-            pd.DataFrame(type_data, index=[0]).T.to_excel(writer, sheet_name='类型分布')
+            pd.DataFrame(list(type_data.items()), columns=['类型', '数量']).to_excel(writer, sheet_name='类型分布', index=False)
+            has_data = True
+        
+        if not has_data:
+            pd.DataFrame({'提示': ['无数据']}).to_excel(writer, sheet_name='汇总')
     excel_io.seek(0)
     return excel_io
 
@@ -472,26 +506,18 @@ with col_left:
             for i, f in enumerate(uploaded):
                 uploaded_files[f"custom_{i}"] = f
     else:
-        if 'dynamic_files' not in st.session_state:
-            st.session_state.dynamic_files = []
-        
-        for i, f_info in enumerate(st.session_state.dynamic_files):
-            uploaded_files[f"dyn_{i}"] = st.file_uploader(f"《{f_info['label']}》", type=["xlsx", "xls", "csv"], key=f"dyn_file_{i}")
-        
-        col_f1, col_f2 = st.columns([3, 1])
-        with col_f1:
-            new_label = st.text_input("添加文件标签", placeholder="如：企业投诉数据", key="new_dynamic_file")
-        with col_f2:
-            st.markdown("<br>")
-            if st.button("➕ 添加", key="add_dynamic"):
-                if new_label:
-                    st.session_state.dynamic_files.append({"label": new_label, "key": f"dyn_{len(st.session_state.dynamic_files)}"})
-                    st.rerun()
-        
-        if st.session_state.dynamic_files:
-            if st.button("清空文件列表", key="clear_dynamic"):
-                st.session_state.dynamic_files = []
-                st.rerun()
+        # 投诉举报、食品安全、医疗器械等 - 直接多文件上传
+        uploaded = st.file_uploader("上传业务数据文件（支持多文件）", type=["xlsx", "xls", "csv"], accept_multiple_files=True, key="biz_files")
+        if uploaded:
+            for i, f in enumerate(uploaded):
+                uploaded_files[f"biz_{i}"] = f
+
+    # 显示已上传文件状态
+    file_count = sum(1 for v in uploaded_files.values() if v is not None)
+    if file_count > 0:
+        st.success(f"✅ 已上传 {file_count} 个文件")
+    else:
+        st.warning("⏳ 请上传数据文件...")
 
     st.markdown("##### ⚙️ 大模型引擎")
     selected_model_input = st.selectbox(
@@ -501,18 +527,36 @@ with col_left:
     )
 
     st.markdown("<br>", unsafe_allow_html=True)
-    start_btn = st.button("🚀 开始自动化分析", use_container_width=True, type="primary")
+    
+    # 根据文件是否上传决定按钮是否可用
+    start_btn = False
+    if file_count == 0:
+        st.button("🚀 开始自动化分析", use_container_width=True, type="primary", disabled=True)
+        st.info("💡 请先上传数据文件后，再点击开始")
+    else:
+        start_btn = st.button("🚀 开始自动化分析", use_container_width=True, type="primary")
 
 if start_btn:
     uploaded_count = sum(1 for v in uploaded_files.values() if v is not None)
     if uploaded_count == 0:
-        st.warning("⚠️ 提示：请至少上传1份业务数据后再点击开始！")
-    else:
-        st.session_state.selected_model = selected_model_input
-        st.session_state.started = True
-        st.session_state.processed = False
-        st.session_state.uploaded_files = uploaded_files
-        st.rerun()
+        st.warning("⚠️ 提示：请先上传数据文件，等待文件显示在页面后再点击开始！")
+        st.stop()
+    
+    # 验证文件是否有效
+    valid_files = {}
+    for k, v in uploaded_files.items():
+        if v is not None and hasattr(v, 'name'):
+            valid_files[k] = v
+    
+    if len(valid_files) == 0:
+        st.warning("⚠️ 文件上传不完整，请重新选择文件后等待显示后再点击开始！")
+        st.stop()
+    
+    st.session_state.selected_model = selected_model_input
+    st.session_state.started = True
+    st.session_state.processed = False
+    st.session_state.uploaded_files = valid_files
+    st.rerun()
 
 with col_right:
     st.markdown('<div class="flat-title">🎛️ 智能分析控制台</div>', unsafe_allow_html=True)
@@ -551,51 +595,76 @@ with col_right:
                     c_url = DEEPSEEK_BASE_URL
                     c_name = DEEPSEEK_MODEL_NAME
 
-                is_custom_domain = st.session_state.selected_domain in st.session_state.custom_domains or st.session_state.selected_domain == "自定义"
+                is_custom_domain = st.session_state.selected_domain in st.session_state.custom_domains or st.session_state.selected_domain == "自定义" or st.session_state.selected_domain in ["投诉举报", "食品安全", "医疗器械"]
                 
                 if is_custom_domain:
-                    data_summary = "\n".join([f"- {k}: {v}" for k, v in totals.items()])
-                    top_items = "\n".join([f"- {k}: {v}" for k, v in list(top_data.items())[:5]]) if top_data else "暂无"
+                    data_summary = f"数据文件数：{totals.get('数据文件数', 0)}，总记录数：{totals.get('总记录数', 0)}"
                     
-                    prompt = f"""你是一位数据分析专家。请根据用户上传的业务数据进行分析，并撰写一份专业的分析简报。
+                    region_dist = f"区域分布：{', '.join([f'{k}({v}条)' for k, v in list(top_data.items())[:8]])}" if top_data else "无区域数据"
+                    
+                    type_dist = ""
+                    if type_data:
+                        type_dist = f"类型分布：{', '.join([f'{k}({v}条)' for k, v in list(type_data.items())[:8]])}"
+                    
+                    col_info = sample_columns.get('列名', []) if isinstance(sample_columns, dict) else []
+                    col_str = ", ".join(col_info[:15]) if col_info else "未知"
+                    
+                    prompt = f"""你是一位市场监管局的高级数据分析师。请根据以下业务数据撰写一份专业的月度分析简报。
 
 【数据概况】
 {data_summary}
+总记录数：{totals.get('总记录数', 0)} 条
 
-【关键数据分布】
-{top_items}
+【数据列名】
+{col_str}
 
-请根据以上数据：
-1. 识别数据中的关键指标和趋势
-2. 分析主要特征和模式
-3. 用"政府智库"的专业口吻撰写一份300-400字的月度分析简报
-4. 简报应包含数据解读、问题发现、建议意见三个部分
+【区域分布】（按数量降序）
+{region_dist}
 
-注意：如果某些数据字段不适用于你的分析，可以忽略。"""
+【类型分布】
+{type_dist}
+
+请用"政府智库"的专业口吻，撰写300-400字的月度分析简报，包含：
+1. 数据概况：总数据量、各区域分布情况
+2. 特征分析：找出数据集中的热点区域、类型分布等
+3. 问题发现：识别出的主要问题
+4. 建议意见：基于数据提出工作建议
+
+要求：基于真实数据进行分析，所有统计数据必须准确。"""
                 else:
-                    top3_districts = list(df_summary.index[:3]) if not df_summary.empty else []
-                    top1_applicant = list(top_data.keys())[0] if top_data else "无"
-                    top1_count = list(top_data.values())[0] if top_data else 0
-                    top_types = list(type_data.keys())[:3] if type_data else []
-                    top_ipc = list(class_data.keys()) if class_data else []
+                    data_summary = f"数据文件数：{totals.get('数据文件数', 0)}，总记录数：{totals.get('总记录数', 0)}"
+                    
+                    region_dist = f"区域分布：{', '.join([f'{k}({v}条)' for k, v in list(top_data.items())[:8]])}" if top_data else "无区域数据"
+                    
+                    type_dist = ""
+                    if type_data:
+                        type_dist = f"类型分布：{', '.join([f'{k}({v}条)' for k, v in list(type_data.items())[:8]])}"
+                    
+                    col_info = sample_columns.get('列名', []) if isinstance(sample_columns, dict) else []
+                    col_str = ", ".join(col_info[:15]) if col_info else "未知"
+                    
+                    prompt = f"""你是一位市场监管局的高级数据分析师。请根据以下业务数据撰写一份专业的月度分析简报。
 
-                    prompt_values = {
-                        "数据文件数": totals.get("数据文件数", 0),
-                        "总记录数": totals.get("总记录数", 0),
-                        "授权总量": totals.get("授权总量", 0),
-                        "有效总量": totals.get("有效总量", 0),
-                        "投诉量": totals.get("投诉量", 0),
-                        "检查次数": totals.get("检查次数", 0),
-                        "top3_districts": ', '.join(top3_districts) if top3_districts else "暂无",
-                        "top1_applicant": top1_applicant,
-                        "top1_count": top1_count,
-                        "top_types": ', '.join(top_types) if top_types else "暂无",
-                        "top_ipc": ', '.join(top_ipc) if top_ipc else "暂无",
-                        "生产": totals.get("生产企业", 0),
-                        "经营_value": totals.get("经营企业", 0),
-                        "不良事件": totals.get("不良事件", 0),
-                    }
-                    prompt = domain["prompt_template"].format(**prompt_values)
+【数据概况】
+{data_summary}
+总记录数：{totals.get('总记录数', 0)} 条
+
+【数据列名】
+{col_str}
+
+【区域分布】（按数量降序）
+{region_dist}
+
+【类型分布】
+{type_dist}
+
+请用"政府智库"的专业口吻，撰写300-400字的月度分析简报，包含：
+1. 数据概况：总数据量、各区域分布情况
+2. 特征分析：找出数据集中的热点区域、类型分布等
+3. 问题发现：识别出的主要问题
+4. 建议意见：基于数据提出工作建议
+
+要求：基于真实数据进行分析，所有统计数据必须准确。"""
 
                 try:
                     client = OpenAI(api_key=c_key, base_url=c_url)
